@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Launch gamepad teleoperation in the existing Franka development container."""
 import argparse
+import datetime
 import json
 import re
 import subprocess
@@ -26,6 +27,7 @@ def main():
     parser.add_argument("--config", type=Path, default=repository / "config/gamepad.yaml")
     parser.add_argument("--duration", type=float, default=0)
     parser.add_argument("--dry-run", action="store_true", help="Print the container command without starting it")
+    parser.add_argument("--log", nargs="?", const="auto", help="Record diagnostics; defaults to a timestamped CSV under workspace logs/")
     args = parser.parse_args()
     try:
         config = args.config.expanduser().resolve(strict=True)
@@ -45,6 +47,19 @@ def main():
         if not ip:
             parser.error("Supply --robot-ip or set ROBOT_IP in config/robot.env")
         command += ["--robot-ip", ip]
+    if args.log is not None:
+        if args.mode not in ("execute", "preview", "simulate"):
+            parser.error("--log requires --execute, --preview or --simulate")
+        if args.log == "auto":
+            name = datetime.datetime.now().strftime("gamepad-%Y%m%d-%H%M%S-%f.csv")
+            log = root / "logs" / name
+        else:
+            log = Path(args.log).expanduser().resolve()
+        try:
+            container_log = Path("/workspace") / log.relative_to(root)
+        except ValueError:
+            parser.error("Diagnostic log must be inside the Franka workspace")
+        command += ["--log", str(container_log)]
     if args.dry_run:
         print(json.dumps(command, indent=2))
         return 0

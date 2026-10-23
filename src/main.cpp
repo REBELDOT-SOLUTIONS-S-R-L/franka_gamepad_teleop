@@ -1,6 +1,8 @@
 #include "franka_gamepad_teleop/core.hpp"
 #include "franka_gamepad_teleop/input.hpp"
 #include "franka_gamepad_teleop/gripper.hpp"
+#include "franka_gamepad_teleop/logging.hpp"
+#include <yaml-cpp/yaml.h>
 #include <franka/robot.h>
 #include <franka/control_types.h>
 #include <chrono>
@@ -8,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 
@@ -15,7 +18,7 @@ namespace {
 volatile std::sig_atomic_t interrupted=0;
 void signal_handler(int) { interrupted=1; }
 struct Options {
-  std::string config,ip,mode="preview";
+  std::string config,ip,log,mode="preview";
   double duration=0;
 };
 Options options(int argc,char** argv) {
@@ -30,12 +33,14 @@ Options options(int argc,char** argv) {
         "  --preview     Read robot state and show target deltas; no motion (default)\n"
         "  --execute     Run real Cartesian pose control; starts disarmed\n"
         "  --validate-config  Validate YAML only, without connecting to devices\n"
+        "  --log FILE   Record diagnostic CSV at up to 250 Hz; no control changes\n"
         "  --duration S  Exit after S seconds (0 means unlimited)\n";
       std::exit(0);
-    } else if(a=="--config"||a=="--robot-ip"||a=="--duration") {
+    } else if(a=="--config"||a=="--robot-ip"||a=="--duration"||a=="--log") {
       if(++i>=argc) throw std::runtime_error("Missing value after "+a);
       if(a=="--config") o.config=argv[i];
       else if(a=="--robot-ip") o.ip=argv[i];
+      else if(a=="--log") o.log=argv[i];
       else { size_t used=0; o.duration=std::stod(argv[i],&used); if(used!=std::string(argv[i]).size()||!std::isfinite(o.duration)||o.duration<0) throw std::runtime_error("Invalid duration"); }
     } else if(a=="--inspect"||a=="--simulate"||a=="--read-state"||a=="--preview"||a=="--execute"||a=="--validate-config") {
       if(mode_set) throw std::runtime_error("Choose one operating mode");
@@ -43,6 +48,8 @@ Options options(int argc,char** argv) {
     } else throw std::runtime_error("Unknown argument: "+a);
   }
   if(o.config.empty()) throw std::runtime_error("--config is required");
+  if(!o.log.empty()&&o.mode!="execute"&&o.mode!="preview"&&o.mode!="simulate")
+    throw std::runtime_error("--log requires execute, preview or simulate mode");
   if(o.mode!="inspect"&&o.mode!="simulate"&&o.mode!="validate-config"&&o.ip.empty()) throw std::runtime_error("--robot-ip is required");
   return o;
 }
@@ -112,15 +119,40 @@ int main(int argc,char** argv) {
       return 0;
     }
     std::unique_ptr<franka::Robot> robot;
+    std::optional<franka::RobotState> initial_state;
     Pose initial=identity_pose(); initial[12]=.5; initial[14]=.4;
     if(opt.mode!="simulate") {
       robot=std::make_unique<franka::Robot>(opt.ip);
       const auto state=robot->readOnce(); initial=state.O_T_EE;
+      initial_state=state;
       if(!valid_pose(initial)) throw std::runtime_error("Robot supplied an invalid TCP transform");
       pose("Current configured TCP (O_T_EE)",initial);
       if(opt.mode=="read-state") return 0;
     } else pose("Synthetic initial TCP",initial);
     Reader reader(config); std::cout<<reader.description<<std::endl;
+    std::unique_ptr<DiagnosticLog> diagnostics;
+    if(!opt.log.empty()) {
+      YAML::Node metadata;
+      metadata["schema_version"]=1; metadata["mode"]=opt.mode; metadata["robot_ip"]=opt.ip;
+      metadata["compiled"]=std::string(__DATE__)+" "+__TIME__;
+      metadata["sample_rate_hz_max"]=250;
+      metadata["pose_layout"]="column-major 4x4; translation indices 12,13,14; metres";
+      metadata["mapped_order"]="base_X base_Y base_Z tcp_Rx tcp_Ry tcp_Rz tcp_Z (normalized)";
+      metadata["alignment"]="Input and app target belong to this callback; commanded/desired/measured are from its incoming RobotState, before this target is processed by the SDK/robot.";
+      metadata["config"]=YAML::LoadFile(opt.config); metadata["controller_mapping"]=reader.description;
+      if(initial_state) {
+        auto array=[&](const char* name,const auto& values) { for(double v:values) metadata["initial_robot"][name].push_back(v); };
+        array("O_T_EE",initial_state->O_T_EE); array("F_T_EE",initial_state->F_T_EE);
+        array("F_T_NE",initial_state->F_T_NE); array("NE_T_EE",initial_state->NE_T_EE);
+        array("EE_T_K",initial_state->EE_T_K); array("F_x_Cee",initial_state->F_x_Cee);
+        array("F_x_Cload",initial_state->F_x_Cload);
+        metadata["initial_robot"]["m_ee"]=initial_state->m_ee;
+        metadata["initial_robot"]["m_load"]=initial_state->m_load;
+      }
+      YAML::Emitter emitter; emitter<<metadata;
+      diagnostics=std::make_unique<DiagnosticLog>(opt.log,emitter.c_str());
+      std::cout<<"Diagnostic CSV: "<<opt.log<<std::endl;
+    }
     Delta delta(config,initial);
     GripperChannel channel;
     std::unique_ptr<GripperWorker> gripper;
@@ -143,6 +175,28 @@ int main(int argc,char** argv) {
       }
       telemetry.store(s); return s;
     };
+    uint64_t diagnostic_cycle=0;
+    double last_diagnostic_time=-1;
+    auto record=[&](const Step& step,double period,const franka::RobotState* state=nullptr) {
+      if(!diagnostics) return;
+      ++diagnostic_cycle;
+      const double now=steady_time();
+      const double clock=state?state->time.toSec():now;
+      if(last_diagnostic_time>=0&&clock-last_diagnostic_time<.003999) return;
+      last_diagnostic_time=clock;
+      DiagnosticSample sample;
+      sample.cycle=diagnostic_cycle; sample.monotonic=now; sample.robot_time=state?clock:0;
+      sample.period=period; sample.input=last_input; sample.mapped=map_input(config,last_input); sample.step=step;
+      if(state) {
+        sample.has_robot=true; sample.robot_mode=static_cast<int>(state->robot_mode);
+        sample.measured=state->O_T_EE; sample.commanded=state->O_T_EE_c; sample.desired=state->O_T_EE_d;
+        sample.q=state->q; sample.q_d=state->q_d; sample.dq=state->dq;
+        sample.tau_external=state->tau_ext_hat_filtered;
+        sample.commanded_twist=state->O_dP_EE_c; sample.commanded_acceleration=state->O_ddP_EE_c;
+        sample.external_wrench=state->O_F_ext_hat_K; sample.command_success_rate=state->control_command_success_rate;
+      }
+      diagnostics->record(sample);
+    };
     std::cout<<"Mode: "<<opt.mode<<"; delta "<<config.speed*1000<<" mm/s, "<<config.rotation*180/kPi
       <<" deg/s; DISARMED; Y toggles arm/disarm; A grasp, B fully open"<<std::endl;
     if(opt.mode=="execute") {
@@ -161,6 +215,7 @@ int main(int argc,char** argv) {
           for(double dq:state.dq) stationary=stationary&&std::abs(dq)<.01;
           stationary_time=stationary?stationary_time+period.toSec():0;
           const auto s=tick(period.toSec(),stationary_time>=.10);
+          record(s,period.toSec(),&state);
           const franka::CartesianPose command(s.target);
           return s.shutdown&&channel.at_rest.load()?franka::MotionFinished(command):command;
         },franka::ControllerMode::kCartesianImpedance,true,config.cutoff);
@@ -169,12 +224,13 @@ int main(int argc,char** argv) {
       double previous=0;
       robot->read([&](const franka::RobotState& state) {
         const double now=state.time.toSec(); const double dt=previous==0?0:now-previous; previous=now;
-        const auto s=tick(dt); return !(s.shutdown&&s.stopped);
+        const auto s=tick(dt); record(s,dt,&state); return !(s.shutdown&&s.stopped);
       });
     } else {
       auto previous=steady_time();
       while(true) {
-        const auto now=steady_time(); const auto s=tick(now-previous); previous=now;
+        const auto now=steady_time(); const double dt=now-previous; const auto s=tick(dt); previous=now;
+        record(s,dt);
         if(s.shutdown&&s.stopped) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }

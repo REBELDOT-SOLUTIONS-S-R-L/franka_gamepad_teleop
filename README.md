@@ -108,6 +108,30 @@ valid calibration is required. Set `gripper.enabled: false` to run without a Han
 
 ## Checks and failure handling
 
+For rotation-drift diagnostics, enable optional logging:
+
+```bash
+./franka gamepad --execute --log
+# Or choose a new filename inside the workspace:
+./franka gamepad --execute --log logs/z-rotation.csv
+```
+
+This records a CSV and a `.csv.meta.yaml` sidecar under the workspace's `logs/`
+directory. Logging does not change control settings or the integration/filtering
+code. The callback copies samples into a fixed queue at up to 250 Hz; a separate
+thread writes files. A full queue drops diagnostic samples without blocking
+control. Normal shutdown drains the queue and records dropped-sample counts.
+Existing log files are never overwritten.
+
+Recorded values include raw and mapped inputs, target pose, measured TCP,
+SDK-reported last commanded and desired poses, joints, commanded twist and
+acceleration, estimated external wrench, timing and command success rate.
+All poses are column-major 4×4 matrices, with base XYZ in indices 12–14 in metres.
+The input and app target belong to the current callback; the reported SDK/robot
+state precedes processing that new target. The sidecar preserves the YAML
+settings, controller mapping, initial TCP/stiffness frame transforms and tool/load
+mass/centre-of-mass data. Simulation rows have `has_robot=0`.
+
 Gamepad loss, stale polling, invalid input, excessive callback timing gaps,
 gripper faults and exit requests latch a stop and end the session after rest.
 Restart after a latched stop. Robot/network/reflex errors exit without automatic
