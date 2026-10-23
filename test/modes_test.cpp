@@ -1,8 +1,12 @@
 #include "franka_gamepad_teleop/core.hpp"
 #include "franka_gamepad_teleop/force_control.hpp"
 #include <cmath>
+#include <algorithm>
+#include <filesystem>
 #include <functional>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 
 using namespace gamepad;
@@ -130,11 +134,52 @@ int main(int argc,char** argv) {
   test("stationarity requires 100 ms of measured and commanded rest",[] {
     RestMonitor r;std::array<double,7> q{};std::array<double,6> v{},cmd{};
     for(int i=0;i<99;++i) require(!r.update(.001,q,v,cmd),"stillness accepted too early");
-    require(r.update(.001,q,v,cmd),"rest did not settle");v[0]=.002;require(!r.update(.001,q,v,cmd),"measured TCP motion accepted");
+    require(r.update(.001,q,v,cmd),"rest did not settle");v[0]=.006;require(!r.update(.001,q,v,cmd),"gross measured TCP motion accepted");
     v[0]=0;cmd[3]=.01;require(!r.update(.001,q,v,cmd),"commanded motion accepted");
     q[0]=.01;require(!r.update(.001,q,v,cmd,false),"joint motion accepted");
     q[0]=0;for(int i=0;i<101;++i) r.update(.001,q,v,cmd,false);
     require(r.update(.001,q,v,cmd,false),"torque-mode rest used stale motion-generator velocity");
+  });
+  test("stationary velocity noise no longer prevents arming",[] {
+    RestMonitor monitor;std::array<double,7> q{};std::array<double,6> measured{},commanded{};
+    bool ready=false;
+    for(int i=0;i<1000;++i) {
+      measured[0]=(i%2?1.5:-1.5)*.001;
+      measured[1]=(i%3==0?.8:-.4)*.001;
+      q[0]=(i%2?1:-1)*.001;
+      ready=monitor.update(.001,q,measured,commanded);
+    }
+    require(ready,"idle estimator noise repeatedly reset the quiet window");
+  });
+  test("sustained low-speed motion still blocks readiness",[] {
+    RestMonitor monitor;std::array<double,7> q{};std::array<double,6> measured{},commanded{};
+    measured[0]=.002;
+    for(int i=0;i<1000;++i) require(!monitor.update(.001,q,measured,commanded),"sustained 2 mm/s motion accepted as rest");
+    measured.fill(0);
+    for(int i=0;i<200;++i) monitor.update(.001,q,measured,commanded);
+    measured[1]=.006;require(!monitor.update(.001,q,measured,commanded),"gross-motion onset did not clear readiness immediately");
+  });
+  test("recorded stationary FR3 velocity estimates permit readiness",[&] {
+    const auto file=std::filesystem::path(argv[1]).parent_path()/"rest_velocity_noise.csv";
+    std::ifstream input(file);require(input.good(),"recorded idle fixture missing");
+    std::string line;std::getline(input,line);
+    RestMonitor monitor;std::array<double,6> commanded{};
+    int samples=0,ready=0;
+    while(std::getline(input,line)) {
+      std::replace(line.begin(),line.end(),',',' ');std::istringstream row(line);
+      double dt=0;std::array<double,7> dq{};std::array<double,6> velocity{};
+      row>>dt;for(auto& value:dq)row>>value;for(auto& value:velocity)row>>value;
+      require(!row.fail(),"invalid idle fixture row");
+      if(monitor.update(dt,dq,velocity,commanded)) ++ready;
+      ++samples;
+    }
+    require(samples>=400&&ready>samples*.8,"recorded idle measurements still block arming");
+  });
+  test("arming refusal records the specific stillness condition",[&] {
+    Rig r(defaults);r.feedback.still=false;
+    const auto refused=r.press(r.config.arm);
+    require(refused.arm_refused&&refused.arm_refusal_reason==32,"arming refusal did not identify measured-rest gate");
+    r.feedback.still=true;r.arm();
   });
   test("force torque maps the task wrench and compensates Coriolis",[&] {
     auto s=force_state();ForceController controller(defaults.force_control);controller.seed(s);

@@ -190,7 +190,16 @@ Step Teleop::update(const Input& s,double now,double dt,bool pause,bool exit,con
             (!feedback.valid||feedback.still)&&
             !(s.buttons&((1U<<config_.close)|(1U<<config_.open)|(1U<<config_.cycle)))) {
       armed_=true; ++epoch_;
-    } else out.arm_refused=true;
+    } else {
+      out.arm_refused=true;
+      if(!neutral) out.arm_refusal_reason|=1;
+      if(!at_rest||!no_wrench) out.arm_refusal_reason|=2;
+      if(pause) out.arm_refusal_reason|=4;
+      if(arm_inhibit_) out.arm_refusal_reason|=8;
+      if(!feedback.backend_ready) out.arm_refusal_reason|=16;
+      if(feedback.valid&&!feedback.still) out.arm_refusal_reason|=32;
+      if(s.buttons&((1U<<config_.close)|(1U<<config_.open)|(1U<<config_.cycle))) out.arm_refusal_reason|=64;
+    }
   }
   if(valid) { previous_buttons_=s.buttons; initialized_=true; }
   if(armed_&&config_.gripper) {
@@ -245,20 +254,33 @@ Step Teleop::update(const Input& s,double now,double dt,bool pause,bool exit,con
   }
   out.target=target_; out.mode=mode_; out.armed=armed_; out.epoch=epoch_; out.shutdown=shutdown_;
   out.mode_ready=feedback.backend_ready&&!out.mode_changed;
+  out.robot_still=physical_still; out.rest_elapsed=feedback.rest_elapsed;
+  out.measured_velocity=feedback.measured_velocity;out.rest_velocity=feedback.rest_velocity;
   out.stopped=velocity_.norm()<1e-10&&omega_.norm()<1e-10&&force_.norm()<1e-10&&moment_.norm()<1e-10;
   return out;
 }
 bool RestMonitor::update(double dt,const std::array<double,7>& dq,const std::array<double,6>& measured,
                          const std::array<double,6>& commanded,bool use_commanded) {
-  bool still=std::isfinite(dt)&&dt>=0&&dt<=.05;
+  bool finite=std::isfinite(dt)&&dt>=0&&dt<=.05;
+  for(double value:dq) finite=finite&&std::isfinite(value);
+  for(size_t i=0;i<6;++i) finite=finite&&std::isfinite(measured[i])&&(!use_commanded||std::isfinite(commanded[i]));
+  if(!finite) { settled_=0;initialized_=false;filtered_.fill(0);return false; }
+  if(!initialized_) { filtered_=measured;initialized_=true; }
+  const double gain=dt/(.020+dt);
+  for(size_t i=0;i<6;++i) filtered_[i]+=gain*(measured[i]-filtered_[i]);
+  bool still=true;
   for(double value:dq) still=still&&std::isfinite(value)&&std::abs(value)<.005;
-  double linear=0,angular=0,command_linear=0,command_angular=0;
+  double linear=0,angular=0,raw_linear=0,raw_angular=0,command_linear=0,command_angular=0;
   for(size_t i=0;i<6;++i) {
-    still=still&&std::isfinite(measured[i])&&(!use_commanded||std::isfinite(commanded[i]));
-    (i<3?linear:angular)+=measured[i]*measured[i];
+    (i<3?linear:angular)+=filtered_[i]*filtered_[i];
+    (i<3?raw_linear:raw_angular)+=measured[i]*measured[i];
     (i<3?command_linear:command_angular)+=commanded[i]*commanded[i];
   }
-  still=still&&linear<1e-6&&angular<1e-4&&(!use_commanded||(command_linear<1e-8&&command_angular<1e-6));
+  // Raw encoder-derived velocity noise must not reset a 100 ms quiet window
+  // on every sub-millimetre spike. Filter signed Cartesian velocities over
+  // 20 ms, while retaining immediate joint, gross-motion and command gates.
+  still=still&&linear<1e-6&&angular<1e-4&&raw_linear<25e-6&&raw_angular<.0025&&
+    (!use_commanded||(command_linear<1e-8&&command_angular<1e-6));
   settled_=still?settled_+dt:0;
   return settled_>=.1;
 }

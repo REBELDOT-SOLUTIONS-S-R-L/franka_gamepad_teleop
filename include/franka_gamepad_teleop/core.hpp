@@ -71,18 +71,28 @@ struct Step {
   bool armed = false, stopped = true, shutdown = false, arm_refused = false;
   bool mode_changed=false, mode_refused=false;
   bool mode_ready=true;
+  bool robot_still=false;
+  uint32_t arm_refusal_reason=0;
+  double rest_elapsed=0;
+  std::array<double,6> measured_velocity{},rest_velocity{};
   uint32_t epoch = 0;
 };
 struct Feedback {
   Pose pose=identity_pose();
   bool valid=false, still=false, backend_ready=true;
+  double rest_elapsed=0;
+  std::array<double,6> measured_velocity{},rest_velocity{};
 };
 class RestMonitor {
  public:
   bool update(double dt,const std::array<double,7>& dq,const std::array<double,6>& measured,
               const std::array<double,6>& commanded,bool use_commanded=true);
+  double elapsed() const { return settled_; }
+  const std::array<double,6>& filtered_velocity() const { return filtered_; }
  private:
   double settled_=0;
+  bool initialized_=false;
+  std::array<double,6> filtered_{};
 };
 class Teleop {
  public:

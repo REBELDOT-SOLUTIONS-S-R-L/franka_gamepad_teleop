@@ -38,6 +38,8 @@ void header(std::ostream& stream) {
   stream<<",control_mode,control_backend,mode_ready,mode_changed,mode_refused";
   headers(stream,"requested_velocity",6); headers(stream,"requested_wrench",6);
   headers(stream,"task_wrench",6); headers(stream,"sent_torque",7);
+  stream<<",robot_still,rest_elapsed_s,arm_refused,arm_refusal_reason";
+  headers(stream,"measured_velocity",6);headers(stream,"rest_velocity",6);
   stream<<'\n';
 }
 void row(std::ostream& stream,const DiagnosticSample& s,uint64_t dropped) {
@@ -52,6 +54,8 @@ void row(std::ostream& stream,const DiagnosticSample& s,uint64_t dropped) {
   stream<<','<<static_cast<int>(s.step.mode)<<','<<static_cast<int>(s.backend)<<','<<s.step.mode_ready
     <<','<<s.step.mode_changed<<','<<s.step.mode_refused;
   values(stream,s.step.velocity); values(stream,s.step.wrench); values(stream,s.task_wrench); values(stream,s.sent_torque);
+  stream<<','<<s.step.robot_still<<','<<s.step.rest_elapsed<<','<<s.step.arm_refused<<','<<s.step.arm_refusal_reason;
+  values(stream,s.step.measured_velocity);values(stream,s.step.rest_velocity);
   stream<<'\n';
 }
 }

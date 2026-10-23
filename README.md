@@ -21,6 +21,13 @@ ends at rest before the new API starts. Release X and press Y separately to arm
 the new mode; simultaneous X/Y cannot arm or switch modes. The console reports
 the selected mode, controller readiness and rejected requests.
 
+Measured stillness uses a 20 ms filter on signed Cartesian velocity, followed by
+a 100 ms quiet window. Instantaneous joint velocity, gross TCP motion and
+commanded velocity are checked separately. This avoids repeatedly resetting
+readiness on stationary FR3 velocity-estimator noise. Rejected arm requests name
+the blocking condition; diagnostics include raw/filtered velocity, quiet-window
+duration and arming refusal bits.
+
 The left stick and L2/R2 act in the **robot base frame**. All rotations
 use the **TCP's local axes**, and D-pad up/down adds translation along the TCP's
 local +Z/−Z axis. Rotations change orientation about the TCP origin without

@@ -67,11 +67,12 @@ struct Telemetry {
   std::atomic<int> grip{0};
   std::atomic<int> mode{0};
   std::atomic<bool> mode_refused{false},mode_ready{false};
+  std::atomic<uint32_t> arm_reason{0};
   std::array<std::atomic<double>,16> target{};
   void store(const gamepad::Step& s) {
     for(size_t i=0;i<16;++i) target[i].store(s.target[i]);
     armed.store(s.armed); stopping.store(s.shutdown);
-    if(s.arm_refused) refused.store(true);
+    if(s.arm_refused) { arm_reason.store(s.arm_refusal_reason); refused.store(true); }
     if(s.grip!=gamepad::Grip::None) grip.store(static_cast<int>(s.grip));
     mode.store(static_cast<int>(s.mode)); mode_ready.store(s.mode_ready);
     if(s.mode_refused) mode_refused.store(true);
@@ -85,7 +86,18 @@ class Reporter {
       const bool armed=data_.armed.load(),stopping=data_.stopping.load();
       if(armed!=was_armed) { std::cout<<(armed?"ARMED":"DISARMED: decelerating to hold")<<std::endl; was_armed=armed; }
       if(stopping&&!was_stopping) { std::cout<<"STOPPING: input/robot timing, gripper fault, duration or exit request"<<std::endl; was_stopping=true; }
-      if(data_.refused.exchange(false)) std::cout<<"Arm refused: release all motion controls and A/B; wait for rest, then press Y again"<<std::endl;
+      if(data_.refused.exchange(false)) {
+        const auto reason=data_.arm_reason.load();
+        std::cout<<"Arm refused:";
+        if(reason&1) std::cout<<" motion controls not neutral;";
+        if(reason&2) std::cout<<" app velocity/wrench still decelerating;";
+        if(reason&4) std::cout<<" gripper busy;";
+        if(reason&8) std::cout<<" release X and Y after mode change;";
+        if(reason&16) std::cout<<" controller transition pending;";
+        if(reason&32) std::cout<<" waiting for measured robot rest;";
+        if(reason&64) std::cout<<" release A/B/X;";
+        std::cout<<" press Y again after readiness"<<std::endl;
+      }
       const int mode=data_.mode.load(); const bool ready=data_.mode_ready.load();
       if(mode!=previous_mode||ready!=was_ready) {
         std::cout<<"Control mode: "<<gamepad::mode_name(static_cast<gamepad::ControlMode>(mode))
@@ -149,6 +161,7 @@ int main(int argc,char** argv) {
       YAML::Node metadata;
       metadata["schema_version"]=2; metadata["mode"]=opt.mode; metadata["robot_ip"]=opt.ip;
       metadata["control_modes"]="0=Delta, 1=Speed, 2=Force; control_backend is the API active for this sample";
+      metadata["arm_refusal_bits"]="1=nonneutral controls,2=app braking,4=gripper busy,8=release after mode change,16=backend pending,32=measured rest pending,64=A/B/X held";
       metadata["command_units"]="requested_velocity: base-frame m/s, rad/s; requested_wrench/task_wrench: base-frame N,Nm at TCP; sent_torque: Nm without gravity/friction";
       metadata["compiled"]=std::string(__DATE__)+" "+__TIME__;
       metadata["sample_rate_hz_max"]=250;
@@ -239,7 +252,9 @@ int main(int argc,char** argv) {
           auto feedback=[&](const franka::RobotState& state,double dt,const std::array<double,42>& jacobian) {
             Feedback f; f.pose=state.O_T_EE; f.valid=true;
             f.backend_ready=teleop.mode()==active_backend;
-            f.still=rest.update(dt,state.dq,measured_velocity(state,jacobian),state.O_dP_EE_c,active_backend!=ControlMode::Force);
+            f.measured_velocity=measured_velocity(state,jacobian);
+            f.still=rest.update(dt,state.dq,f.measured_velocity,state.O_dP_EE_c,active_backend!=ControlMode::Force);
+            f.rest_elapsed=rest.elapsed();f.rest_velocity=rest.filtered_velocity();
             return f;
           };
           auto done=[&](const Step& s,const Feedback& f) {
@@ -293,6 +308,7 @@ int main(int argc,char** argv) {
         // velocities gate stillness; clamp preview integration steps only.
         std::array<double,6> zero{};
         f.still=rest.update(dt,state.dq,zero,zero,false);
+        f.rest_elapsed=rest.elapsed();f.rest_velocity=rest.filtered_velocity();
         const auto s=tick(std::clamp(dt,0.,.020),f); active_backend=s.mode;
         record(s,dt,&state); return !(s.shutdown&&s.stopped);
       });
