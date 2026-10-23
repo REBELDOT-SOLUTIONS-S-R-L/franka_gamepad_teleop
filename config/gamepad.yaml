@@ -1,0 +1,35 @@
+# Reloaded on each launch. SDL maps the generic pad to these standard names.
+mode: delta
+gamepad:
+  # Empty matches any recognized controller. Refuse ambiguous multiple matches.
+  name_contains: "QIXIONG PC Gamepad"
+  stick_deadzone: 0.12
+  trigger_deadzone: 0.04
+  poll_hz: 200
+  stale_timeout_s: 0.10
+motion:
+  max_translation_m_s: 0.020
+  max_rotation_deg_s: 20.0
+  translation_acceleration_m_s2: 0.050
+  rotation_acceleration_deg_s2: 60.0
+  # libfranka's Cartesian rate limiter remains enabled.
+  lowpass_cutoff_hz: 10.0
+bindings:
+  # Positive SDL stick Y points down; positive X points right.
+  translation_x: [{source: left_y, scale: -1.0}]
+  translation_y: [{source: left_x, scale: -1.0}]
+  translation_z: [{source: left_trigger, scale: 1.0}, {source: right_trigger, scale: -1.0}]
+  rotation_x: [{source: right_x, scale: 1.0}]
+  rotation_y: [{source: right_y, scale: -1.0}]
+  rotation_z: [{source: right_shoulder, scale: 1.0}, {source: left_shoulder, scale: -1.0}]
+  arm_toggle: y
+  gripper_close: a
+  gripper_open: b
+gripper:
+  enabled: true
+  # Same contact-grasp parameters as the hand app. No automatic lift.
+  force_N: 30.0
+  speed_m_s: 0.040
+  epsilon_inner_m: 0.001
+  epsilon_outer_m: 0.080
+  # B opens to the maximum width reported by the calibrated Franka Hand.
