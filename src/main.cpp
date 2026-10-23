@@ -163,6 +163,9 @@ int main(int argc,char** argv) {
       metadata["control_modes"]="0=Delta, 1=Speed, 2=Force; control_backend is the API active for this sample";
       metadata["arm_refusal_bits"]="1=nonneutral controls,2=app braking,4=gripper busy,8=release after mode change,16=backend pending,32=measured rest pending,64=A/B/X held";
       metadata["command_units"]="requested_velocity: base-frame m/s, rad/s; requested_wrench/task_wrench: base-frame N,Nm at TCP; sent_torque: Nm without gravity/friction";
+      metadata["force_reference"]="follows measured TCP along the driven wrench directions; orthogonal pose hold; no return to original arming pose";
+      metadata["effective_force_linear_damping_Ns_m"]=std::max(config.force_control.translation_damping,config.force_control.max_force/config.force_control.max_linear_speed);
+      metadata["effective_force_angular_damping_Nms_rad"]=std::max(config.force_control.rotation_damping,config.force_control.max_torque/config.force_control.max_angular_speed);
       metadata["compiled"]=std::string(__DATE__)+" "+__TIME__;
       metadata["sample_rate_hz_max"]=250;
       metadata["pose_layout"]="column-major 4x4; translation indices 12,13,14; metres";

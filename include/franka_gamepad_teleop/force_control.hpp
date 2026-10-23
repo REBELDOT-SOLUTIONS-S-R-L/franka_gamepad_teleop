@@ -13,7 +13,8 @@ struct ForceOutput {
   std::array<double,6> task_wrench{};
   bool valid=true;
 };
-// Cartesian impedance plus bounded wrench bias, damped nullspace posture hold,
+// Directional wrench bias with a following hold reference, Cartesian damping,
+// orthogonal pose holding, damped nullspace posture hold,
 // FR3 joint-limit repulsion and bounded/rate-limited joint torques.
 class ForceController {
  public:

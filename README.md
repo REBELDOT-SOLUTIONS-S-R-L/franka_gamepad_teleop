@@ -7,7 +7,7 @@ The app reads the current configured TCP before starting and starts disarmed.
 | --- | --- |
 | Delta | A continuously integrated TCP pose target through CartesianPose |
 | Speed | Direct TCP linear/angular velocity through CartesianVelocities |
-| Force | A Cartesian force/torque bias around a compliant hold pose through joint torques |
+| Force | Sustained directional force/torque bias through joint torques, with damping and orthogonal pose hold |
 
 Delta and Speed use the same configurable limits, defaulting to **20 mm/s** and
 **20 degrees/s**. Force defaults to **5 N** translation and **0.5 Nm** rotation.
@@ -137,21 +137,32 @@ settings, and reports whether an object was confirmed. B uses the calibrated
 Hand's reported `max_width`. No automatic homing runs at startup; an existing
 valid calibration is required. Set `gripper.enabled: false` to run without a Hand.
 
-## Compliant Force mode
+## Sustained Force mode
 
-Force mode is a wrench bias with pose holding, not measured contact-force PI
-regulation. Arming captures the current measured TCP pose. Stick/trigger/button
-deflections produce force and moment components, ramped at the configured slew
-rates. Cartesian spring/damping terms oppose displacement from that pose. A
-neutral input ramps the bias to zero, so the compliant hold tends to return to
-its anchor. Disarming or starting a gripper operation captures the current pose
-before ramping out the bias, avoiding a return toward an old anchor.
+Force mode maintains the requested directional wrench bias for as long as the
+input is held. It does not regulate measured contact force with a PI loop.
+Arming captures the current measured TCP pose. Deflection produces force and
+moment components, ramped at the configured slew rates. The hold reference
+follows measured motion along the driven force/torque direction, so a spring
+back to the original arming pose cannot cancel the sustained input. Orthogonal
+directions retain pose holding.
+
+In free space the robot can continue moving while the input is held. Against an
+object it continues commanding the directional wrench bias. Releasing the input
+ramps that bias down, then holds near the stopping pose instead of returning to
+the original arming pose. Disarming or starting a gripper operation also captures
+the current pose before ramping out the bias.
 
 `force_control` configures bias limits, slew rates, Cartesian stiffness/damping,
 nullspace posture holding, FR3 joint-limit repulsion and joint torque limits/rate.
-The default 200 N/m translational stiffness means a 5 N bias corresponds roughly
-to 25 mm static displacement in an ideal free-space model. Actual behavior depends
-on the robot, payload, contact and controller tracking.
+Stiffness applies to the retained hold error; it does not impose a finite travel
+distance along the force-driven direction. Velocity damping is at least
+`max_force_N / motion.max_translation_m_s` and
+`max_torque_Nm / (motion.max_rotation_deg_s * pi / 180)`.
+This bounds nominal free-space speed in an ideal model. Damping reduces net
+drive as velocity rises; the requested bias remains active. This is not a
+certified speed limit or a guarantee of measured contact force. Actual behavior
+depends on the robot, payload, contact and controller tracking.
 
 The sum of the Cartesian bias, restoring and damping terms is vector-limited to
 5 N / 0.5 Nm by default. Coriolis compensation and bounded nullspace/joint-limit

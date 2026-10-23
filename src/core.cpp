@@ -123,6 +123,8 @@ Config load_config(const std::string& path) {
       if(!std::isfinite(f.torque_limits[i])||f.torque_limits[i]<=0||f.torque_limits[i]>(i<4?70:10))
         throw std::runtime_error("Invalid external-control joint torque limit");
   }
+  c.force_control.max_linear_speed=c.speed;
+  c.force_control.max_angular_speed=c.rotation;
   return c;
 }
 double deadzone(double x,double z,bool trigger) {
@@ -236,6 +238,27 @@ Step Teleop::update(const Input& s,double now,double dt,bool pause,bool exit,con
   omega_=slew(omega_,w,config_.angular_acceleration*step);
   force_=slew(force_,force,config_.force_control.force_slew*step);
   moment_=slew(moment_,moment,config_.force_control.torque_slew*step);
+  if(mode_==ControlMode::Force&&feedback.valid) {
+    // Follow measured motion only along the force-driven direction. A held
+    // bias must not be cancelled by a spring to the original arming position.
+    // Orthogonal components retain their position/orientation hold reference.
+    if(force_.norm()>1e-10) {
+      const Eigen::Vector3d axis=force_.normalized();
+      const Eigen::Vector3d error=frame.topRightCorner<3,1>()-t.topRightCorner<3,1>();
+      t.topRightCorner<3,1>()+=axis*axis.dot(error);
+    }
+    if(moment_.norm()>1e-10) {
+      const Eigen::Vector3d axis=moment_.normalized();
+      const Eigen::Matrix3d current=frame.topLeftCorner<3,3>();
+      const Eigen::Matrix3d anchor=t.topLeftCorner<3,3>();
+      const Eigen::AngleAxisd difference(current*anchor.transpose());
+      const Eigen::Vector3d error=difference.axis()*difference.angle();
+      const Eigen::Vector3d held=error-axis*axis.dot(error);
+      Eigen::Matrix3d next=current;
+      if(held.norm()>1e-12) next=Eigen::AngleAxisd(-held.norm(),held.normalized()).toRotationMatrix()*current;
+      t.topLeftCorner<3,3>()=Eigen::Quaterniond(next).normalized().toRotationMatrix();
+    }
+  }
   if(mode_!=ControlMode::Force) t.topRightCorner<3,1>()+=velocity_*step;
   const double angle=omega_.norm()*step;
   if(angle>0&&mode_!=ControlMode::Force) {

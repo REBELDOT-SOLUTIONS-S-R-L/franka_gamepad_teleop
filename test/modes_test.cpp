@@ -122,10 +122,50 @@ int main(int argc,char** argv) {
     r.arm();r.input.buttons=(1U<<button_index("dpad_up"))|(1U<<button_index("right_shoulder"));r.run();
     near(r.step.wrench[0],5);near(r.step.wrench[2],0);near(r.step.wrench[3],.5);near(r.step.wrench[5],0);
   });
-  test("Force neutral release ramps bias down and preserves compliant anchor",[&] {
+  test("Force neutral release ramps bias down and holds near current position",[&] {
     Config c=defaults;c.initial_mode=ControlMode::Force;Rig r(c);r.arm();r.input.axes[1]=-1;r.run();
     r.feedback.pose[12]=.02;r.input.axes={};const auto s=r.tick();require(s.wrench[0]>0&&s.wrench[0]<5,"force bias jumped");
-    r.run();require(r.step.stopped,"force bias did not reach zero");near(r.step.target[12],0);
+    r.run();require(r.step.stopped,"force bias did not reach zero");near(r.step.target[12],.02);
+  });
+  test("sustained force follows driven translation but holds orthogonal position",[&] {
+    Config c=defaults;c.initial_mode=ControlMode::Force;Rig r(c);r.arm();r.input.axes[1]=-1;
+    r.feedback.pose[12]=.10;r.feedback.pose[13]=.01;r.run();
+    near(r.step.target[12],.10);near(r.step.target[13],0);
+    auto state=force_state();state.pose=r.feedback.pose;state.q[0]=.10;
+    ForceController controller(c.force_control);controller.seed(state);
+    const auto output=controller.update(r.step,state,.001);
+    require(output.task_wrench[0]>0&&output.task_wrench[1]<0,"driven force or orthogonal hold lost");
+  });
+  test("continuous contact commands retain force after arbitrary driven travel",[&] {
+    Config c=defaults;c.initial_mode=ControlMode::Force;Rig r(c);r.arm();r.input.axes[1]=-1;
+    auto state=force_state();ForceController controller(c.force_control);controller.seed(state);
+    r.feedback.pose[12]=.15;state.pose=r.feedback.pose;state.q[0]=.15;
+    for(int i=0;i<2000;++i) {
+      const auto step=r.tick();const auto output=controller.update(step,state,.001);state.previous_torque=output.torque;
+      if(i>500) {near(step.wrench[0],5);near(output.task_wrench[0],5);}
+    }
+    near(r.step.target[12],.15);
+  });
+  test("sustained moments follow each TCP rotation axis without spring cancellation",[&] {
+    for(int axis=0;axis<3;++axis) {
+      Config c=defaults;c.initial_mode=ControlMode::Force;Rig r(c);
+      Eigen::Map<Eigen::Matrix4d> frame(r.feedback.pose.data());
+      const Eigen::Matrix3d start=(Eigen::AngleAxisd(.6,Eigen::Vector3d::UnitY())*
+        Eigen::AngleAxisd(.3,Eigen::Vector3d::UnitZ())).toRotationMatrix();
+      frame.topLeftCorner<3,3>()=start;r.arm();
+      if(axis==0) r.input.axes[2]=1;
+      if(axis==1) r.input.axes[3]=-1;
+      if(axis==2) r.input.buttons=1U<<button_index("right_shoulder");
+      const Eigen::Matrix3d current=start*Eigen::AngleAxisd(.8,Eigen::Vector3d::Unit(axis)).toRotationMatrix();
+      frame.topLeftCorner<3,3>()=current;r.run();
+      Eigen::Map<const Eigen::Matrix4d> target(r.step.target.data());
+      require((target.topLeftCorner<3,3>()-current).norm()<1e-8,"angular hold reference stayed at arming orientation");
+      const Eigen::Vector3d moment=Eigen::Map<const Eigen::Vector3d>(r.step.wrench.data()+3);
+      require((moment-current.col(axis)*.5).norm()<1e-8,"continuous moment lost its TCP frame");
+      auto state=force_state();state.pose=r.feedback.pose;ForceController controller(c.force_control);controller.seed(state);
+      const auto output=controller.update(r.step,state,.001);
+      require((Eigen::Map<const Eigen::Vector3d>(output.task_wrench.data()+3)-moment).norm()<1e-8,"restoring moment cancelled held input");
+    }
   });
   test("Force disarm captures the current pose and clears bias",[&] {
     Config c=defaults;c.initial_mode=ControlMode::Force;Rig r(c);r.arm();r.input.axes[1]=-1;r.run();
@@ -222,17 +262,23 @@ int main(int argc,char** argv) {
     auto s=force_state();ForceController controller(defaults.force_control);controller.seed(s);s.jacobian[0]=std::nan("");
     Step step;step.target=s.pose;require(!controller.update(step,s,.001).valid,"nonfinite Jacobian accepted");
   });
-  test("compliant plant reaches finite bias displacement and returns on release",[&] {
-    auto s=force_state();ForceController controller(defaults.force_control);controller.seed(s);
-    Step step;step.target=s.pose;double x=0,v=0;
-    for(int cycle=0;cycle<6000;++cycle) {
-      step.wrench[0]=cycle<3000?5:0;s.pose[12]=x;s.q[0]=x;s.dq[0]=v;
-      const auto out=controller.update(step,s,.001);require(out.valid,"plant torque invalid");s.previous_torque=out.torque;
+  test("free-space plant continues past old 25 mm equilibrium and stops near release",[&] {
+    Config c=defaults;c.initial_mode=ControlMode::Force;c.speed=.1;c.force_control.max_linear_speed=c.speed;
+    Rig r(c);r.arm();auto s=force_state();ForceController controller(c.force_control);controller.seed(s);
+    double x=0,v=0,release_position=0,maximum_speed=0;
+    for(int cycle=0;cycle<7000;++cycle) {
+      r.input.axes[1]=cycle<4000?-1:0;
+      r.feedback.pose[12]=x;r.feedback.still=std::abs(v)<.001;
+      s.pose[12]=x;s.q[0]=x;s.dq[0]=v;
+      const auto step=r.tick();const auto out=controller.update(step,s,.001);require(out.valid,"plant torque invalid");s.previous_torque=out.torque;
       v+=out.torque[0]*.001;x+=v*.001;
-      require(std::abs(x)<.05,"compliant force bias ran away");
-      if(cycle==2999) near(x,.025,.002);
+      maximum_speed=std::max(maximum_speed,std::abs(v));
+      if(cycle==3999) release_position=x;
     }
-    near(x,0,.001);near(v,0,.001);
+    require(release_position>.30,"held force settled near the old arming point");
+    require(maximum_speed<=.1001,"nominal free-space damping failed to limit speed");
+    require(x>=release_position-.002&&x<release_position+.03,"release pulled back to the old arming point or failed to brake");
+    near(v,0,.001);require(r.step.stopped,"released force bias did not reach zero");
   });
   std::cout<<count<<" mode/force tests passed\n";
 }

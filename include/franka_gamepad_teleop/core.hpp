@@ -35,6 +35,9 @@ struct ForceSettings {
   double max_force=5, max_torque=.5, force_slew=20, torque_slew=2;
   double translation_stiffness=200, rotation_stiffness=20;
   double translation_damping=28.2842712475, rotation_damping=8.94427191;
+  // Derived from the shared motion limits when loading a profile. Damping is
+  // increased as needed to bound nominal free-space drift under full bias.
+  double max_linear_speed=.020,max_angular_speed=20*kPi/180;
   double nullspace_stiffness=5, nullspace_damping=4.472135955;
   double joint_margin=.10, joint_barrier_stiffness=20, torque_rate=200;
   // FR3 joint limits from franka_description 2.9.0 robots/fr3/joint_limits.yaml.

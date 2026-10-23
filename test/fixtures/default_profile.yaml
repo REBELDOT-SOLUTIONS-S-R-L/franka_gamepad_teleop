@@ -16,7 +16,8 @@ motion:
   # libfranka's Cartesian rate limiter remains enabled.
   lowpass_cutoff_hz: 10.0
 force_control:
-  # Force/torque bias around the compliant hold pose; no contact-force PI loop.
+  # Sustained force/torque bias; the hold reference follows driven directions.
+  # Orthogonal directions stay held. This is not a contact-force PI loop.
   max_force_N: 5.0
   max_torque_Nm: 0.5
   force_slew_N_s: 20.0

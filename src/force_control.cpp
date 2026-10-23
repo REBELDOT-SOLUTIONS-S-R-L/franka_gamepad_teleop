@@ -28,11 +28,13 @@ ForceOutput ForceController::update(const Step& step,const ForceState& s,double 
   const Eigen::AngleAxisd difference(r.transpose()*current.topLeftCorner<3,3>());
   error.tail<3>()=r*difference.axis()*difference.angle();
   const Eigen::Matrix<double,6,1> velocity=j*dq;
+  const double linear_damping=std::max(settings_.translation_damping,settings_.max_force/settings_.max_linear_speed);
+  const double angular_damping=std::max(settings_.rotation_damping,settings_.max_torque/settings_.max_angular_speed);
   Eigen::Matrix<double,6,1> wrench;
   wrench.head<3>()=limit(bias.head<3>()-settings_.translation_stiffness*error.head<3>()-
-    settings_.translation_damping*velocity.head<3>(),settings_.max_force);
+    linear_damping*velocity.head<3>(),settings_.max_force);
   wrench.tail<3>()=limit(bias.tail<3>()-settings_.rotation_stiffness*error.tail<3>()-
-    settings_.rotation_damping*velocity.tail<3>(),settings_.max_torque);
+    angular_damping*velocity.tail<3>(),settings_.max_torque);
   Eigen::Map<Eigen::Matrix<double,6,1>>(out.task_wrench.data())=wrench;
   Eigen::Matrix<double,6,6> gram=j*j.transpose();
   gram.diagonal().array()+=1e-4;
