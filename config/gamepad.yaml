@@ -1,4 +1,5 @@
 # Reloaded on each launch. SDL maps the generic pad to these standard names.
+# Initial mode. X cycles Delta -> Speed -> Force -> Delta while disarmed/still.
 mode: delta
 gamepad:
   # Empty matches any recognized controller. Refuse ambiguous multiple matches.
@@ -14,6 +15,22 @@ motion:
   rotation_acceleration_deg_s2: 60.0
   # libfranka's Cartesian rate limiter remains enabled.
   lowpass_cutoff_hz: 10.0
+force_control:
+  # Force/torque bias around the compliant hold pose; no contact-force PI loop.
+  max_force_N: 5.0
+  max_torque_Nm: 0.5
+  force_slew_N_s: 20.0
+  torque_slew_Nm_s: 2.0
+  translation_stiffness_N_m: 200.0
+  rotation_stiffness_Nm_rad: 20.0
+  translation_damping_Ns_m: 28.2842712475
+  rotation_damping_Nms_rad: 8.94427191
+  nullspace_stiffness_Nm_rad: 5.0
+  nullspace_damping_Nms_rad: 4.472135955
+  joint_margin_rad: 0.10
+  joint_barrier_stiffness_Nm_rad: 20.0
+  torque_rate_Nm_s: 200.0
+  joint_torque_limits_Nm: [35.0, 35.0, 35.0, 35.0, 8.0, 8.0, 8.0]
 bindings:
   # Positive SDL stick Y points down; positive X points right.
   translation_x: [{source: left_y, scale: -1.0}]
@@ -26,6 +43,7 @@ bindings:
   rotation_y: [{source: right_y, scale: -1.0}]
   rotation_z: [{source: right_shoulder, scale: 1.0}, {source: left_shoulder, scale: -1.0}]
   arm_toggle: y
+  mode_cycle: x
   gripper_close: a
   gripper_open: b
 gripper:

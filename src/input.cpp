@@ -24,7 +24,7 @@ Device::Device(const Config& config) {
       throw std::runtime_error("Selected gamepad lacks a required stick/trigger axis");
     }
   }
-  for(int button:{config.arm,config.close,config.open}) {
+  for(int button:{config.arm,config.close,config.open,config.cycle}) {
     if(!SDL_GameControllerHasButton(controller_,static_cast<SDL_GameControllerButton>(button))) {
       SDL_GameControllerClose(controller_); SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
       throw std::runtime_error("Selected gamepad lacks a configured action button");

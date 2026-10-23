@@ -15,6 +15,9 @@ struct DiagnosticSample {
   Input input;
   std::array<double,7> mapped{};
   Step step;
+  ControlMode backend=ControlMode::Delta;
+  std::array<double,7> sent_torque{};
+  std::array<double,6> task_wrench{};
   bool has_robot=false;
   int robot_mode=0;
   Pose measured{},commanded{},desired{};

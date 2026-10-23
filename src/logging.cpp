@@ -35,6 +35,9 @@ void header(std::ostream& stream) {
   for(const auto* name:{"target","measured","commanded","desired"}) headers(stream,name,16);
   for(const auto* name:{"q","q_d","dq","tau_external"}) headers(stream,name,7);
   for(const auto* name:{"commanded_twist","commanded_acceleration","external_wrench"}) headers(stream,name,6);
+  stream<<",control_mode,control_backend,mode_ready,mode_changed,mode_refused";
+  headers(stream,"requested_velocity",6); headers(stream,"requested_wrench",6);
+  headers(stream,"task_wrench",6); headers(stream,"sent_torque",7);
   stream<<'\n';
 }
 void row(std::ostream& stream,const DiagnosticSample& s,uint64_t dropped) {
@@ -46,6 +49,9 @@ void row(std::ostream& stream,const DiagnosticSample& s,uint64_t dropped) {
   values(stream,s.measured); values(stream,s.commanded); values(stream,s.desired);
   values(stream,s.q); values(stream,s.q_d); values(stream,s.dq); values(stream,s.tau_external);
   values(stream,s.commanded_twist); values(stream,s.commanded_acceleration); values(stream,s.external_wrench);
+  stream<<','<<static_cast<int>(s.step.mode)<<','<<static_cast<int>(s.backend)<<','<<s.step.mode_ready
+    <<','<<s.step.mode_changed<<','<<s.step.mode_refused;
+  values(stream,s.step.velocity); values(stream,s.step.wrench); values(stream,s.task_wrench); values(stream,s.sent_torque);
   stream<<'\n';
 }
 }

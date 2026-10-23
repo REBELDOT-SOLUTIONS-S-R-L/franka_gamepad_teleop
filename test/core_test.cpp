@@ -15,7 +15,7 @@ namespace {
 void require(bool yes,const char* message) { if(!yes) throw std::runtime_error(message); }
 void near(double actual,double wanted,double tolerance=1e-9) { require(std::abs(actual-wanted)<tolerance,"numeric mismatch"); }
 struct Fixture {
-  Config config; Delta delta; Input input; double now=100; Step last;
+  Config config; Teleop delta; Input input; double now=100; Step last;
   Fixture(const Config& c,const Pose& pose=identity_pose()):config(c),delta(c,pose) {
     input.connected=true; tick();
   }
@@ -55,7 +55,7 @@ int main(int argc,char** argv) {
     Input s; s.axes[4]=s.axes[5]=1; near(map_input(config,s)[2],0);
   });
   test("starts disarmed; a held Y is not a press",[&] {
-    Delta d(config,identity_pose()); Input s; s.connected=true; s.stamp=1; s.buttons=1U<<config.arm;
+    Teleop d(config,identity_pose()); Input s; s.connected=true; s.stamp=1; s.buttons=1U<<config.arm;
     require(!d.update(s,1,.001).armed,"startup Y armed"); s.stamp=1.1;
     require(!d.update(s,1.1,.001).armed,"held Y armed");
   });
@@ -220,7 +220,7 @@ int main(int argc,char** argv) {
   });
   test("invalid initial pose rejected",[&] {
     auto bad=identity_pose(); bad[0]=2; bool threw=false;
-    try { Delta d(config,bad); } catch(...) { threw=true; }
+    try { Teleop d(config,bad); } catch(...) { threw=true; }
     require(threw,"invalid pose accepted");
   });
   test("atomic input snapshots are coherent",[&] {
@@ -242,7 +242,7 @@ int main(int argc,char** argv) {
     const auto tmp=std::filesystem::temp_directory_path()/("gamepad-config-test-"+std::to_string(getpid())+".yaml");
     for(int mode=0;mode<5;++mode) {
       auto node=YAML::LoadFile(argv[1]);
-      if(mode==0) node["mode"]="force";
+      if(mode==0) node["mode"]="unknown";
       if(mode==1) node["bindings"]["translation_x"][0]["source"]="typo";
       if(mode==2) node["motion"]["max_translation_m_s"]=-1;
       if(mode==3) node["bindings"]["gripper_open"]="a";

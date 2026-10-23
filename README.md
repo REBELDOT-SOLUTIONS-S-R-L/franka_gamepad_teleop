@@ -1,15 +1,33 @@
 # Franka gamepad teleoperation
 
-Delta pose control for the Franka Research 3 using a generic gamepad. The app
-reads the current configured TCP before starting. Deflection continuously moves
-a target pose at up to **20 mm/s** and **20 degrees/s**. Combined translation
-and rotation inputs retain their respective vector magnitude limits.
+Delta, Speed and Force control for the Franka Research 3 using a generic gamepad.
+The app reads the current configured TCP before starting and starts disarmed.
 
-The left stick and L2/R2 translate in the **robot base frame**. All rotations
+| Mode | Deflection commands |
+| --- | --- |
+| Delta | A continuously integrated TCP pose target through CartesianPose |
+| Speed | Direct TCP linear/angular velocity through CartesianVelocities |
+| Force | A Cartesian force/torque bias around a compliant hold pose through joint torques |
+
+Delta and Speed use the same configurable limits, defaulting to **20 mm/s** and
+**20 degrees/s**. Force defaults to **5 N** translation and **0.5 Nm** rotation.
+Combined inputs retain the respective vector magnitude limits.
+
+**X cycles Delta → Speed → Force → Delta.** A change is accepted only while
+disarmed, with zero app velocity/wrench, measured robot rest for at least 100 ms,
+neutral motion controls, no gripper operation and released Y/A/B. A rejected
+press is not queued. Holding X changes the mode once. The old SDK control loop
+ends at rest before the new API starts. Release X and press Y separately to arm
+the new mode; simultaneous X/Y cannot arm or switch modes. The console reports
+the selected mode, controller readiness and rejected requests.
+
+The left stick and L2/R2 act in the **robot base frame**. All rotations
 use the **TCP's local axes**, and D-pad up/down adds translation along the TCP's
 local +Z/−Z axis. Rotations change orientation about the TCP origin without
 changing its position. Local Z follows the TCP orientation as it rotates. Base
-and local translation inputs combine under the same 20 mm/s vector limit.
+and local translation inputs combine under the same translation vector limit.
+In Force mode these same inputs produce force/torque components instead of
+velocity: base XYZ force, TCP-local rotational torque, and D-pad TCP-local Z force.
 There is no application workspace box.
 
 | Control | Action |
@@ -22,6 +40,7 @@ There is no application workspace box.
 | Right stick up/down | Positive / negative rotation about TCP Y |
 | R1 / L1 | Positive / negative rotation about TCP Z |
 | Y | Toggle arm/disarm |
+| X | Cycle mode while disarmed and still |
 | A | Close until contact using the hand app's 30 N grasp parameters |
 | B | Open to the calibrated Hand's maximum width |
 
@@ -53,7 +72,7 @@ From `~/workspace/franka`:
 # Preview target changes while reading the robot; no motion commands (default).
 ./franka gamepad --preview
 
-# Real control starts disarmed. Y enables motion.
+# Real control starts disarmed. Y enables output; X changes mode at rest.
 ./franka gamepad --execute
 ```
 
@@ -62,12 +81,13 @@ The robot address defaults to the workspace's `config/robot.env`; override with
 and `--dry-run` to print the command without starting it. The launcher also runs
 directly: `python3 ws/src/franka_gamepad_teleop/tools/run.py --inspect`.
 
-Real mode uses libfranka Cartesian pose motion generation and Cartesian impedance
-control. It holds the current pose while disarmed. The first command uses
-`O_T_EE_c` to preserve FCI startup continuity. The measured starting TCP printed
+Delta and Speed use libfranka Cartesian pose/velocity motion generation and
+Cartesian impedance control. Zero speed holds the motion generator's endpoint.
+Delta's first command uses `O_T_EE_c` for continuity; returning from external
+torque control captures the measured pose. The measured starting TCP printed
 to the console is `O_T_EE`: the existing configured EE, including its flange-to-EE
 transform. The app does not redefine the TCP or change collision thresholds,
-robot safety functions, impedance parameters, joint limits or tool/load settings.
+robot safety functions, built-in impedance parameters, joint limits or tool/load settings.
 Run only one arm/gripper control application at a time.
 
 ## Configuration
@@ -86,6 +106,10 @@ For example, changing `translation_y` scale from `-1.0` to `1.0` reverses Y trav
 frame. `translation_tcp_z` sets the additional local-Z bindings, defaulting to
 D-pad up (+) and down (−). Older profiles without that key disable this extra
 translation input while retaining TCP-local rotation.
+`mode` selects the initial `delta`, `speed` or `force` mode, and
+`bindings.mode_cycle` maps the cycle button (default `x`). Action buttons must be
+distinct and cannot also be motion inputs. Older profiles use X and the default
+force settings when these fields are omitted.
 
 SDL supplies standard names through its controller mapping database. The
 workstation's **QIXIONG PC Gamepad** is recognized: L2 is raw axis 5, R2 axis 4,
@@ -106,6 +130,34 @@ settings, and reports whether an object was confirmed. B uses the calibrated
 Hand's reported `max_width`. No automatic homing runs at startup; an existing
 valid calibration is required. Set `gripper.enabled: false` to run without a Hand.
 
+## Compliant Force mode
+
+Force mode is a wrench bias with pose holding, not measured contact-force PI
+regulation. Arming captures the current measured TCP pose. Stick/trigger/button
+deflections produce force and moment components, ramped at the configured slew
+rates. Cartesian spring/damping terms oppose displacement from that pose. A
+neutral input ramps the bias to zero, so the compliant hold tends to return to
+its anchor. Disarming or starting a gripper operation captures the current pose
+before ramping out the bias, avoiding a return toward an old anchor.
+
+`force_control` configures bias limits, slew rates, Cartesian stiffness/damping,
+nullspace posture holding, FR3 joint-limit repulsion and joint torque limits/rate.
+The default 200 N/m translational stiffness means a 5 N bias corresponds roughly
+to 25 mm static displacement in an ideal free-space model. Actual behavior depends
+on the robot, payload, contact and controller tracking.
+
+The sum of the Cartesian bias, restoring and damping terms is vector-limited to
+5 N / 0.5 Nm by default. Coriolis compensation and bounded nullspace/joint-limit
+torques are additional joint-space terms; these limits are not a calibrated
+contact-force guarantee. Gravity/friction compensation remains with the robot.
+No application Cartesian workspace box is added. The app does not raise collision
+thresholds or change robot-side safety functions.
+
+Force uses the SDK model/Jacobian in the real-time torque callback, with fixed-size
+calculations and continuous torque output. Physical Speed/Force behavior and API
+handovers still need operator commissioning; offline tests do not establish
+physical performance or resolve the previously observed rotational tracking error.
+
 ## Checks and failure handling
 
 For rotation-drift diagnostics, enable optional logging:
@@ -123,7 +175,8 @@ thread writes files. A full queue drops diagnostic samples without blocking
 control. Normal shutdown drains the queue and records dropped-sample counts.
 Existing log files are never overwritten.
 
-Recorded values include raw and mapped inputs, target pose, measured TCP,
+Recorded values include control mode/backend/readiness, requested velocity and
+wrench, actual task wrench and sent joint torques, raw/mapped inputs, target pose, measured TCP,
 SDK-reported last commanded and desired poses, joints, commanded twist and
 acceleration, estimated external wrench, timing and command success rate.
 All poses are column-major 4×4 matrices, with base XYZ in indices 12–14 in metres.
@@ -142,12 +195,12 @@ SDL polling, network gripper operations and logging stay outside the RT callback
 ./franka exec bash -c 'cd /workspace/ws/build/franka_gamepad_teleop && ctest --output-on-failure'
 ```
 
-Tests cover binding signs, proportional input, vector rate caps, TCP rotation
-composition, mixed base/local translation, arming/disarming, deceleration, stale/disconnected input, gripper
-request fencing, YAML validation and an SDL virtual controller. Physical motion
-and gripping require an operator-run commissioning session.
-
-Only delta mode is implemented. Speed and force modes will be added separately.
+Tests use a fixed profile under `test/fixtures/`, independently of edits to the
+live YAML. They cover binding signs, proportional input, vector caps, frames,
+mode interlocks, measured stillness, velocity commands, force/torque computation,
+compliant-plant behavior, continuity, gripper fencing and logging. An SDL virtual
+controller plus an SDK stand-in executes the production dispatch code through
+Delta → Speed → Force → Delta with no network or physical robot connection.
 
 ## Dependencies
 
