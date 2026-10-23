@@ -5,6 +5,8 @@
 #include <cmath>
 #include <stdexcept>
 #include <set>
+#include <iomanip>
+#include <sstream>
 
 namespace gamepad {
 namespace {
@@ -100,7 +102,25 @@ Config load_config(const std::string& path) {
   if(c.force<30||c.force>70||c.gripper_speed>.1||c.epsilon_inner>.08||c.epsilon_outer>.08)
     throw std::runtime_error("Invalid Franka Hand force, speed or grasp tolerances");
   if(const auto force=root["force_control"]) {
-    keys(force,{"max_force_N","max_torque_Nm","force_slew_N_s","torque_slew_Nm_s","translation_stiffness_N_m","rotation_stiffness_Nm_rad","translation_damping_Ns_m","rotation_damping_Nms_rad","nullspace_stiffness_Nm_rad","nullspace_damping_Nms_rad","joint_margin_rad","joint_barrier_stiffness_Nm_rad","torque_rate_Nm_s","joint_torque_limits_Nm"});
+    keys(force,{"max_force_N","max_torque_Nm","force_slew_N_s","torque_slew_Nm_s","translation_stiffness_N_m","rotation_stiffness_Nm_rad","translation_damping_Ns_m","rotation_damping_Nms_rad","nullspace_stiffness_Nm_rad","nullspace_damping_Nms_rad","joint_margin_rad","joint_barrier_stiffness_Nm_rad","torque_rate_Nm_s","joint_torque_limits_Nm","ceilings"});
+    const auto ceilings=force["ceilings"];
+    if(ceilings) keys(ceilings,{"max_force_N","max_torque_Nm","force_slew_N_s","torque_slew_Nm_s","translation_stiffness_N_m","rotation_stiffness_Nm_rad","translation_damping_Ns_m","rotation_damping_Nms_rad","nullspace_stiffness_Nm_rad","nullspace_damping_Nms_rad","joint_margin_min_rad","joint_margin_max_rad","joint_barrier_stiffness_Nm_rad","torque_rate_Nm_s","joint_torque_limits_Nm"});
+    auto maximum=[&](const char* key,double fallback) {
+      if(!ceilings||!ceilings[key]) return fallback;
+      const double value=ceilings[key].as<double>();
+      if(!std::isfinite(value)||value<=0)
+        throw std::runtime_error(std::string("force_control.ceilings.")+key+" must be finite and positive");
+      return value;
+    };
+    auto limit_error=[](const std::string& key,double value,const std::string& ceiling,double limit) {
+      std::ostringstream out;out<<std::setprecision(17)<<"force_control."<<key<<" = "<<value
+        <<" exceeds force_control.ceilings."<<ceiling<<" = "<<limit;
+      return std::runtime_error(out.str());
+    };
+    auto upper=[&](const char* key,double value,double fallback) {
+      const double ceiling=maximum(key,fallback);
+      if(value>ceiling) throw limit_error(key,value,key,ceiling);
+    };
     auto& f=c.force_control;
     auto read=[&](const char* key,double& value) { if(force[key]) value=positive(force,key); };
     read("max_force_N",f.max_force); read("max_torque_Nm",f.max_torque);
@@ -114,14 +134,41 @@ Config load_config(const std::string& path) {
       if(!limits.IsSequence()||limits.size()!=7) throw std::runtime_error("joint_torque_limits_Nm needs seven values");
       for(size_t i=0;i<7;++i) f.torque_limits[i]=limits[i].as<double>();
     }
-    if(f.max_force>20||f.max_torque>2||f.force_slew>100||f.torque_slew>10||
-       f.translation_stiffness>3000||f.rotation_stiffness>300||
-       f.translation_damping>200||f.rotation_damping>50||f.nullspace_stiffness>50||f.nullspace_damping>30||
-       f.joint_margin<.05||f.joint_margin>.3||f.joint_barrier_stiffness>100||f.torque_rate>500)
-      throw std::runtime_error("Force settings exceed this application's commissioning ceilings");
-    for(size_t i=0;i<7;++i)
-      if(!std::isfinite(f.torque_limits[i])||f.torque_limits[i]<=0||f.torque_limits[i]>(i<4?70:10))
-        throw std::runtime_error("Invalid external-control joint torque limit");
+    upper("max_force_N",f.max_force,20);upper("max_torque_Nm",f.max_torque,2);
+    upper("force_slew_N_s",f.force_slew,100);upper("torque_slew_Nm_s",f.torque_slew,10);
+    upper("translation_stiffness_N_m",f.translation_stiffness,3000);upper("rotation_stiffness_Nm_rad",f.rotation_stiffness,300);
+    upper("translation_damping_Ns_m",f.translation_damping,200);upper("rotation_damping_Nms_rad",f.rotation_damping,50);
+    upper("nullspace_stiffness_Nm_rad",f.nullspace_stiffness,50);upper("nullspace_damping_Nms_rad",f.nullspace_damping,30);
+    upper("joint_barrier_stiffness_Nm_rad",f.joint_barrier_stiffness,100);upper("torque_rate_Nm_s",f.torque_rate,500);
+    double minimum_margin=.05;
+    if(ceilings&&ceilings["joint_margin_min_rad"]) {
+      minimum_margin=ceilings["joint_margin_min_rad"].as<double>();
+      if(!std::isfinite(minimum_margin)||minimum_margin<0)
+        throw std::runtime_error("force_control.ceilings.joint_margin_min_rad must be finite and nonnegative");
+    }
+    const double maximum_margin=maximum("joint_margin_max_rad",.3);
+    if(minimum_margin>maximum_margin)
+      throw std::runtime_error("force_control.ceilings.joint_margin_min_rad exceeds joint_margin_max_rad");
+    if(f.joint_margin<minimum_margin) {
+      std::ostringstream out;out<<std::setprecision(17)<<"force_control.joint_margin_rad = "<<f.joint_margin
+        <<" is below force_control.ceilings.joint_margin_min_rad = "<<minimum_margin;
+      throw std::runtime_error(out.str());
+    }
+    if(f.joint_margin>maximum_margin) throw limit_error("joint_margin_rad",f.joint_margin,"joint_margin_max_rad",maximum_margin);
+    std::array<double,7> torque_ceilings{70,70,70,70,10,10,10};
+    if(ceilings) if(const auto limits=ceilings["joint_torque_limits_Nm"]) {
+      if(!limits.IsSequence()||limits.size()!=7)
+        throw std::runtime_error("force_control.ceilings.joint_torque_limits_Nm needs seven values");
+      for(size_t i=0;i<7;++i) torque_ceilings[i]=limits[i].as<double>();
+    }
+    for(size_t i=0;i<7;++i) {
+      const std::string key="joint_torque_limits_Nm["+std::to_string(i)+"]";
+      if(!std::isfinite(torque_ceilings[i])||torque_ceilings[i]<=0)
+        throw std::runtime_error("force_control.ceilings."+key+" must be finite and positive");
+      if(!std::isfinite(f.torque_limits[i])||f.torque_limits[i]<=0)
+        throw std::runtime_error("force_control."+key+" must be finite and positive");
+      if(f.torque_limits[i]>torque_ceilings[i]) throw limit_error(key,f.torque_limits[i],key,torque_ceilings[i]);
+    }
   }
   c.force_control.max_linear_speed=c.speed;
   c.force_control.max_angular_speed=c.rotation;

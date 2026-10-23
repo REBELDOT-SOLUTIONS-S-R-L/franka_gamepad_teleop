@@ -32,6 +32,24 @@ force_control:
   joint_barrier_stiffness_Nm_rad: 20.0
   torque_rate_Nm_s: 200.0
   joint_torque_limits_Nm: [35.0, 35.0, 35.0, 35.0, 8.0, 8.0, 8.0]
+  # Editable application validation limits; not robot/SDK limits.
+  # Change both an operating value and its ceiling when increasing the range.
+  ceilings:
+    max_force_N: 20.0
+    max_torque_Nm: 2.0
+    force_slew_N_s: 100.0
+    torque_slew_Nm_s: 10.0
+    translation_stiffness_N_m: 3000.0
+    rotation_stiffness_Nm_rad: 300.0
+    translation_damping_Ns_m: 200.0
+    rotation_damping_Nms_rad: 50.0
+    nullspace_stiffness_Nm_rad: 50.0
+    nullspace_damping_Nms_rad: 30.0
+    joint_margin_min_rad: 0.05
+    joint_margin_max_rad: 0.30
+    joint_barrier_stiffness_Nm_rad: 100.0
+    torque_rate_Nm_s: 500.0
+    joint_torque_limits_Nm: [70.0, 70.0, 70.0, 70.0, 10.0, 10.0, 10.0]
 bindings:
   # Positive SDL stick Y points down; positive X points right.
   translation_x: [{source: left_y, scale: -1.0}]

@@ -155,6 +155,27 @@ the current pose before ramping out the bias.
 
 `force_control` configures bias limits, slew rates, Cartesian stiffness/damping,
 nullspace posture holding, FR3 joint-limit repulsion and joint torque limits/rate.
+The former hardcoded force-mode validation ceilings are editable under
+`force_control.ceilings`, using the same names as the operating settings. The
+joint-margin range uses `joint_margin_min_rad` and `joint_margin_max_rad`.
+For example, to allow a 5 Nm requested torque:
+
+```yaml
+force_control:
+  max_torque_Nm: 5.0
+  torque_slew_Nm_s: 5.0
+  ceilings:
+    max_torque_Nm: 5.0
+    torque_slew_Nm_s: 10.0
+```
+
+The shipped profile lists all application ceilings. Omitted ceiling fields retain
+their previous defaults for older profiles. Errors identify the operating field,
+its value and the configured ceiling. Values must remain finite and positive;
+the minimum joint-margin bound can be zero. These are application validation
+limits; changing them does not override SDK or robot-side constraints. Restart to
+load edits; no rebuild is needed after this version is installed.
+
 Stiffness applies to the retained hold error; it does not impose a finite travel
 distance along the force-driven direction. Velocity damping is at least
 `max_force_N / motion.max_translation_m_s` and

@@ -1,11 +1,14 @@
 #include "franka_gamepad_teleop/core.hpp"
 #include "franka_gamepad_teleop/force_control.hpp"
+#include <yaml-cpp/yaml.h>
+#include <unistd.h>
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
 #include <functional>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -37,10 +40,76 @@ ForceState force_state() {
 int main(int argc,char** argv) {
   if(argc!=2) return 2;
   const Config defaults=load_config(argv[1]); int count=0;
+  auto load_yaml=[&](const YAML::Node& node) {
+    const auto path=std::filesystem::temp_directory_path()/("gamepad-ceilings-test-"+std::to_string(getpid())+".yaml");
+    {std::ofstream out(path);out<<node;}
+    try { auto config=load_config(path.string());std::filesystem::remove(path);return config; }
+    catch(...) {std::filesystem::remove(path);throw;}
+  };
+  auto rejects=[&](const YAML::Node& node,const std::string& field) {
+    try {load_yaml(node);}
+    catch(const std::exception& error) {
+      require(std::string(error.what()).find(field)!=std::string::npos,"validation did not name the offending field");return;
+    }
+    throw std::runtime_error("invalid configuration was accepted");
+  };
   auto test=[&](const char* name,const std::function<void()>& action) {
     try { action();++count;std::cout<<"PASS "<<name<<'\n'; }
     catch(const std::exception& e) { std::cerr<<"FAIL "<<name<<": "<<e.what()<<'\n';std::exit(1); }
   };
+  test("legacy force ceilings retain their defaults and name the field",[&] {
+    auto node=YAML::LoadFile(argv[1]);node["force_control"].remove("ceilings");
+    node["force_control"]["max_torque_Nm"]=5.;rejects(node,"force_control.max_torque_Nm");
+    try {load_yaml(node);}catch(const std::exception& error) {
+      require(std::string(error.what()).find("force_control.ceilings.max_torque_Nm = 2")!=std::string::npos,"legacy default ceiling missing from error");
+    }
+  });
+  test("editable force torque and slew ceilings allow the selected range",[&] {
+    auto node=YAML::LoadFile(argv[1]);auto f=node["force_control"];
+    f["max_force_N"]=25.;f["max_torque_Nm"]=5.;f["force_slew_N_s"]=120.;f["torque_slew_Nm_s"]=15.;
+    auto cap=f["ceilings"];cap["max_force_N"]=30.;cap["max_torque_Nm"]=5.;cap["force_slew_N_s"]=150.;cap["torque_slew_Nm_s"]=20.;
+    const auto c=load_yaml(node);near(c.force_control.max_force,25);near(c.force_control.max_torque,5);
+    near(c.force_control.force_slew,120);near(c.force_control.torque_slew,15);
+  });
+  test("configured ceiling rejects a higher operating value with explicit names",[&] {
+    auto node=YAML::LoadFile(argv[1]);node["force_control"]["max_torque_Nm"]=5.5;
+    node["force_control"]["ceilings"]["max_torque_Nm"]=5.;
+    rejects(node,"force_control.max_torque_Nm = 5.5 exceeds force_control.ceilings.max_torque_Nm = 5");
+  });
+  test("all former scalar gain and rate ceilings are configurable",[&] {
+    auto node=YAML::LoadFile(argv[1]);auto f=node["force_control"];
+    const std::vector<std::pair<std::string,double>> raised={
+      {"translation_stiffness_N_m",3300},{"rotation_stiffness_Nm_rad",330},
+      {"translation_damping_Ns_m",250},{"rotation_damping_Nms_rad",60},
+      {"nullspace_stiffness_Nm_rad",60},{"nullspace_damping_Nms_rad",35},
+      {"joint_barrier_stiffness_Nm_rad",120},{"torque_rate_Nm_s",600}};
+    for(const auto& [key,value]:raised) {f[key]=value;f["ceilings"][key]=value;}
+    f["joint_margin_rad"]=.4;f["ceilings"]["joint_margin_min_rad"]=.02;f["ceilings"]["joint_margin_max_rad"]=.5;
+    const auto c=load_yaml(node);near(c.force_control.translation_stiffness,3300);near(c.force_control.torque_rate,600);near(c.force_control.joint_margin,.4);
+  });
+  test("joint torque ceilings are independently configurable per joint",[&] {
+    auto node=YAML::LoadFile(argv[1]);auto f=node["force_control"];
+    for(int i=0;i<7;++i) {
+      f["joint_torque_limits_Nm"][i]=i<4?75.:11.;
+      f["ceilings"]["joint_torque_limits_Nm"].push_back(i<4?80.:12.);
+    }
+    near(load_yaml(node).force_control.torque_limits[6],11);
+    f["joint_torque_limits_Nm"][6]=13.;rejects(node,"joint_torque_limits_Nm[6]");
+  });
+  test("invalid ceiling values and unknown keys are rejected",[&] {
+    for(double value:{0.,-1.,std::nan(""),std::numeric_limits<double>::infinity()}) {
+      auto node=YAML::LoadFile(argv[1]);node["force_control"]["ceilings"]["max_force_N"]=value;
+      rejects(node,"force_control.ceilings.max_force_N");
+    }
+    auto typo=YAML::LoadFile(argv[1]);typo["force_control"]["ceilings"]["max_force_typo"]=10;
+    rejects(typo,"max_force_typo");
+  });
+  test("joint-margin ceiling ranges and ceiling array shapes are validated",[&] {
+    auto node=YAML::LoadFile(argv[1]);auto cap=node["force_control"]["ceilings"];
+    cap["joint_margin_min_rad"]=.5;cap["joint_margin_max_rad"]=.2;rejects(node,"joint_margin_min_rad");
+    cap.remove("joint_margin_min_rad");cap.remove("joint_margin_max_rad");
+    cap["joint_torque_limits_Nm"].push_back(70.);rejects(node,"force_control.ceilings.joint_torque_limits_Nm needs seven values");
+  });
   test("initial modes and exact cycling order",[&] {
     require(parse_mode("delta")==ControlMode::Delta&&parse_mode("speed")==ControlMode::Speed&&parse_mode("force")==ControlMode::Force,"mode parsing");
     Rig r(defaults);
