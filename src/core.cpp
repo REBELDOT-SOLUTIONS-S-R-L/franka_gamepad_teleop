@@ -61,14 +61,16 @@ Config load_config(const std::string& path) {
   if(c.cutoff>100) throw std::runtime_error("lowpass_cutoff_hz must be at most 100 Hz");
   if(c.speed>1.7||c.rotation>2.5||c.acceleration>8.1||c.angular_acceleration>12.5)
     throw std::runtime_error("Motion settings exceed this application's Cartesian interface ceilings");
-  keys(b,{"translation_x","translation_y","translation_z","rotation_x","rotation_y","rotation_z","arm_toggle","gripper_close","gripper_open"});
+  keys(b,{"translation_x","translation_y","translation_z","rotation_x","rotation_y","rotation_z","translation_tcp_z","arm_toggle","gripper_close","gripper_open"});
   c.arm=button_index(b["arm_toggle"].as<std::string>());
   c.close=button_index(b["gripper_close"].as<std::string>());
   c.open=button_index(b["gripper_open"].as<std::string>());
   if(std::set<int>{c.arm,c.close,c.open}.size()!=3) throw std::runtime_error("Action buttons must be distinct");
-  const std::array<const char*,6> commands={"translation_x","translation_y","translation_z","rotation_x","rotation_y","rotation_z"};
-  for(size_t i=0;i<6;++i) {
+  const std::array<const char*,7> commands={"translation_x","translation_y","translation_z","rotation_x","rotation_y","rotation_z","translation_tcp_z"};
+  for(size_t i=0;i<commands.size();++i) {
     const auto list=b[commands[i]];
+    // Older profiles remain usable without the additional local-Z binding.
+    if(i==6&&!list) continue;
     if(!list.IsSequence()||list.size()==0) throw std::runtime_error("Each motion binding needs at least one source");
     for(const auto& n:list) {
       keys(n,{"source","scale"});
@@ -93,9 +95,9 @@ double deadzone(double x,double z,bool trigger) {
   x=std::clamp(x,trigger?0.:-1.,1.);
   return std::abs(x)<=z?0:std::copysign((std::abs(x)-z)/(1-z),x);
 }
-std::array<double,6> map_input(const Config& c,const Input& s) {
-  std::array<double,6> out{};
-  for(size_t i=0;i<6;++i) {
+std::array<double,7> map_input(const Config& c,const Input& s) {
+  std::array<double,7> out{};
+  for(size_t i=0;i<out.size();++i) {
     for(const auto& b:c.bindings[i]) {
       const double value=b.source<6?deadzone(s.axes[b.source],b.source>=4?c.trigger_deadzone:c.stick_deadzone,b.source>=4)
         :static_cast<double>((s.buttons>>(b.source-6))&1U);
@@ -124,7 +126,7 @@ Step Delta::update(const Input& s,double now,double dt,bool pause,bool exit) {
   shutdown_=shutdown_||exit||!valid||!std::isfinite(dt)||dt<0||dt>.020;
   if(shutdown_) armed_=false;
   const double step=std::isfinite(dt)?std::clamp(dt,0.,.020):.001;
-  const auto mapped=valid?map_input(config_,s):std::array<double,6>{};
+  const auto mapped=valid?map_input(config_,s):std::array<double,7>{};
   const uint32_t rising=initialized_?(s.buttons&~previous_buttons_):0;
   // Opposing triggers/buttons may cancel mathematically while still being held.
   bool neutral=true;
@@ -146,19 +148,23 @@ Step Delta::update(const Input& s,double now,double dt,bool pause,bool exit) {
     else if(rising&(1U<<config_.close)) out.grip=Grip::Close;
   }
   const bool moving=armed_&&!pause&&out.grip==Grip::None;
+  Eigen::Map<Eigen::Matrix4d> t(target_.data());
   Eigen::Vector3d v=Eigen::Vector3d::Zero(),w=Eigen::Vector3d::Zero();
   if(moving) {
-    v=bounded({mapped[0],mapped[1],mapped[2]})*config_.speed;
+    // Blend base translation with the TCP's current local Z direction, then
+    // cap the combined vector so simultaneous inputs retain the speed limit.
+    const Eigen::Vector3d combined=Eigen::Vector3d(mapped[0],mapped[1],mapped[2])+
+      t.topLeftCorner<3,3>().col(2)*mapped[6];
+    v=bounded(combined)*config_.speed;
     w=bounded({mapped[3],mapped[4],mapped[5]})*config_.rotation;
   }
   velocity_=slew(velocity_,v,config_.acceleration*step);
   omega_=slew(omega_,w,config_.angular_acceleration*step);
-  Eigen::Map<Eigen::Matrix4d> t(target_.data());
   t.topRightCorner<3,1>()+=velocity_*step;
   const double angle=omega_.norm()*step;
   if(angle>0) {
-    // Pre-multiply: all rotation axes are fixed in the robot base frame.
-    const Eigen::Matrix3d next=Eigen::AngleAxisd(angle,omega_.normalized()).toRotationMatrix()*t.topLeftCorner<3,3>();
+    // Post-multiply: each increment rotates about the TCP's local axes.
+    const Eigen::Matrix3d next=t.topLeftCorner<3,3>()*Eigen::AngleAxisd(angle,omega_.normalized()).toRotationMatrix();
     t.topLeftCorner<3,3>()=Eigen::Quaterniond(next).normalized().toRotationMatrix();
   }
   out.target=target_; out.armed=armed_; out.epoch=epoch_; out.shutdown=shutdown_;

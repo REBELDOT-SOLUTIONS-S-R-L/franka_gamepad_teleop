@@ -5,18 +5,22 @@ reads the current configured TCP before starting. Deflection continuously moves
 a target pose at up to **20 mm/s** and **20 degrees/s**. Combined translation
 and rotation inputs retain their respective vector magnitude limits.
 
-All translations and rotations use the **robot base frame**. Rotations change
-orientation about the current TCP origin, without rotating its position around
-the base. There is no application workspace box.
+The left stick and L2/R2 translate in the **robot base frame**. All rotations
+use the **TCP's local axes**, and D-pad up/down adds translation along the TCP's
+local +Z/−Z axis. Rotations change orientation about the TCP origin without
+changing its position. Local Z follows the TCP orientation as it rotates. Base
+and local translation inputs combine under the same 20 mm/s vector limit.
+There is no application workspace box.
 
 | Control | Action |
 | --- | --- |
 | Left stick up/down | Base +X / −X |
 | Left stick right/left | Base −Y / +Y |
 | L2 / R2 | Base +Z / −Z |
-| Right stick right/left | Positive / negative rotation about base X |
-| Right stick up/down | Positive / negative rotation about base Y |
-| R1 / L1 | Positive / negative rotation about base Z |
+| D-pad up/down | TCP-local +Z / −Z translation |
+| Right stick right/left | Positive / negative rotation about TCP X |
+| Right stick up/down | Positive / negative rotation about TCP Y |
+| R1 / L1 | Positive / negative rotation about TCP Z |
 | Y | Toggle arm/disarm |
 | A | Close until contact using the hand app's 30 N grasp parameters |
 | B | Open to the calibrated Hand's maximum width |
@@ -78,6 +82,10 @@ Button names are `a`, `b`, `x`, `y`, `back`, `guide`, `start`, `left_stick`,
 `right_stick`, `left_shoulder`, `right_shoulder`, and
 `dpad_up`, `dpad_down`, `dpad_left`, `dpad_right`.
 For example, changing `translation_y` scale from `-1.0` to `1.0` reverses Y travel.
+`translation_x/y/z` refer to the base frame; `rotation_x/y/z` refer to the TCP
+frame. `translation_tcp_z` sets the additional local-Z bindings, defaulting to
+D-pad up (+) and down (−). Older profiles without that key disable this extra
+translation input while retaining TCP-local rotation.
 
 SDL supplies standard names through its controller mapping database. The
 workstation's **QIXIONG PC Gamepad** is recognized: L2 is raw axis 5, R2 axis 4,
@@ -110,8 +118,8 @@ SDL polling, network gripper operations and logging stay outside the RT callback
 ./franka exec bash -c 'cd /workspace/ws/build/franka_gamepad_teleop && ctest --output-on-failure'
 ```
 
-Tests cover binding signs, proportional input, vector rate caps, base rotation
-composition, arming/disarming, deceleration, stale/disconnected input, gripper
+Tests cover binding signs, proportional input, vector rate caps, TCP rotation
+composition, mixed base/local translation, arming/disarming, deceleration, stale/disconnected input, gripper
 request fencing, YAML validation and an SDL virtual controller. Physical motion
 and gripping require an operator-run commissioning session.
 

@@ -33,7 +33,8 @@ struct Config {
   double stick_deadzone = .12, trigger_deadzone = .04, poll_hz = 200, timeout = .10;
   double speed = .020, rotation = 20*kPi/180, acceleration = .05;
   double angular_acceleration = 60*kPi/180, cutoff = 10;
-  std::array<std::vector<Binding>, 6> bindings;
+  // Base XYZ, TCP-local rotation XYZ, and additional TCP-local Z translation.
+  std::array<std::vector<Binding>, 7> bindings;
   int arm = 3, close = 0, open = 1;  // Standard SDL A, B, X, Y indices.
   bool gripper = true;
   double force = 30, gripper_speed = .04, epsilon_inner = .001, epsilon_outer = .08;
@@ -42,7 +43,7 @@ Config load_config(const std::string& path);
 int source_index(const std::string& name);
 int button_index(const std::string& name);
 double deadzone(double value, double zone, bool trigger);
-std::array<double, 6> map_input(const Config&, const Input&);
+std::array<double, 7> map_input(const Config&, const Input&);
 Pose identity_pose();
 bool valid_pose(const Pose&);
 enum class Grip : uint8_t { None = 0, Close = 1, Open = 2 };

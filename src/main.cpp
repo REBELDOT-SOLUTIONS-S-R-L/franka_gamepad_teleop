@@ -104,7 +104,7 @@ int main(int argc,char** argv) {
         if(!s.connected) throw std::runtime_error("Gamepad disconnected");
         std::cout<<"axes [left_x left_y right_x right_y L2 R2]: ";
         for(double x:s.axes) std::cout<<x<<" ";
-        std::cout<<" buttons_mask="<<s.buttons<<" mapped [X Y Z Rx Ry Rz]: ";
+        std::cout<<" buttons_mask="<<s.buttons<<" mapped [base_X base_Y base_Z tcp_Rx tcp_Ry tcp_Rz tcp_Z]: ";
         for(double x:map_input(config,s)) std::cout<<x<<" ";
         std::cout<<std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

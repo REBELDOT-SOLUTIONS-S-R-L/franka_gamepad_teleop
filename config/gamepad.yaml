@@ -19,6 +19,9 @@ bindings:
   translation_x: [{source: left_y, scale: -1.0}]
   translation_y: [{source: left_x, scale: -1.0}]
   translation_z: [{source: left_trigger, scale: 1.0}, {source: right_trigger, scale: -1.0}]
+  # Additional translation along the TCP's local Z, combined with base XYZ.
+  translation_tcp_z: [{source: dpad_up, scale: 1.0}, {source: dpad_down, scale: -1.0}]
+  # All three rotation components use the TCP's local axes.
   rotation_x: [{source: right_x, scale: 1.0}]
   rotation_y: [{source: right_y, scale: -1.0}]
   rotation_z: [{source: right_shoulder, scale: 1.0}, {source: left_shoulder, scale: -1.0}]
